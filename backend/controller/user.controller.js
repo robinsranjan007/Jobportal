@@ -1,6 +1,8 @@
+import cloudinary from "../config/cloudinary.js"; 
 import { User } from "../model/user.model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import getDataUri from "../config/datauri.js";
 
 /* ================= REGISTER ================= */
 export const register = async (req, res) => {
@@ -13,6 +15,11 @@ export const register = async (req, res) => {
         success: false,
       });
     }
+
+    const file = req.file
+
+    const fileuri = getDataUri(file);
+    const cloudResponse = await cloudinary.uploader.upload(fileuri.content)
 
     const user = await User.findOne({ email });
     if (user) {
@@ -30,6 +37,9 @@ export const register = async (req, res) => {
       phoneNumber,
       password: hashedPassword,
       role,
+      profile:{
+        profilePhoto:cloudResponse.secure_url,
+      }
     });
 
     return res.status(201).json({
@@ -96,6 +106,7 @@ export const login = async (req, res) => {
       fullname: user.fullname,
       phoneNumber: user.phoneNumber,
       role: user.role,
+      email:user.email,
       profile: user.profile,
     };
 
@@ -134,61 +145,89 @@ export const logout = async (req,res)=>{
 }
 
 
-export const updateProfile = async(req,res)=>{
-    try {
-        const {fullname,email,phoneNumber,bio,skills}= req.body
-        const file = req.file
-      
-    
+export const updateProfile = async (req, res) => {
+  try {
+    console.log("REQ FILE:", req.file);
 
-    // cloudniary aayga yaha pe 
+    const { fullname, email, phoneNumber, bio, skills } = req.body;
+    const file = req.file;
 
-
-    let skillsArray 
-    if(skills)
-    {
-        skillsArray= skills.split(',')
-    }
-    const userId = req.id  //middle ware authentication
-    let user = await User.findById(userId)
-
-    if(!user)
-    {
-         return res.status(400).json({
-        message: "user not found",
-        success: false,
+    if (!fullname || !email || !phoneNumber || !bio || !skills) {
+      return res.status(400).json({
+        message: "Please provide all required profile fields",
+        success: false
       });
     }
-    
-   if(fullname) user.fullname = fullname;
-   if(email) user.email = email;
-   if(phoneNumber) user.phoneNumber = phoneNumber
-   if(bio) user.profile.bio= bio
-   if(skillsArray) user.profile.skills = skillsArray
 
-    //resume will be added later here...
+    let cloudResponse;
 
+    // Only upload to cloudinary if file exists
+ 
+if (file) {
+  try {
+    const fileUri = getDataUri(file);
+    console.log("File URI:", fileUri);
+    cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
+      resource_type: "raw",
+      public_id: `resumes/${Date.now()}`,  // Custom filename
+      format: 'pdf'  // Force PDF format
+    });
+    console.log("Cloudinary response:", cloudResponse);
+  } catch (err) {
+    console.log("Cloudinary upload error:", err);
+    return res.status(500).json({
+      message: "Failed to upload resume",
+      success: false
+    });
+  }
+}
+    let skillsArray = skills.split(',').map(skill => skill.trim()).filter(Boolean);
 
-    await user.save()
+    const userId = req.id;
+    let user = await User.findById(userId);
 
-       user = {
+    if (!user) {
+      return res.status(400).json({
+        message: "User not found",
+        success: false
+      });
+    }
+
+    // Update basic fields
+    user.fullname = fullname;
+    user.email = email;
+    user.phoneNumber = phoneNumber;
+    user.profile.bio = bio;
+    user.profile.skills = skillsArray;
+
+    // Only update resume if new file was uploaded
+    if (cloudResponse) {
+      user.profile.resume = cloudResponse.secure_url;
+      user.profile.resumeOriginalName = file.originalname;
+    }
+
+    await user.save();
+
+    const userData = {
       _id: user._id,
       fullname: user.fullname,
+      email: user.email,
       phoneNumber: user.phoneNumber,
       role: user.role,
-      profile: user.profile,
+      profile: user.profile
     };
-return  res.status(200).json({
-    message:"profile updated successfully",
-    user,
-    success:true
-})
-    } catch (error) {
 
-        return res.status(400).json({
-        message: "Please provide the missing parameters",
-        success: false,
-      });
+    return res.status(200).json({
+      message: "Profile updated successfully",
+      user: userData,
+      success: true
+    });
 
-    }
-}
+  } catch (error) {
+    console.log("Server error:", error);
+    return res.status(500).json({
+      message: "Server error",
+      success: false
+    });
+  }
+};
